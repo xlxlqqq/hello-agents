@@ -19,6 +19,7 @@ def ask_llm(system: str, user: str) -> str:
         model = os.getenv("MODEL_NAME"),
         messages = messages,
         temperature = 0.2,
+        timeout=30,   # 30 秒超时，避免无限等待
     )
 
     return resp.choices[0].message.content
