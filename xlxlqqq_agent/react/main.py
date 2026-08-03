@@ -20,8 +20,8 @@ def run_agent(user_query: str):
         )
         print(reply)
 
-        match = re.search(r"Action:\s*(\w+)\((.*)\)", reply)
-        finish = re.search(r"Finish\[(.*)\]", reply)
+        match = re.search(r"Action:\s*(\w+)\((.*)\)", reply)  # 找到action信号
+        finish = re.search(r"Finish\[(.*)\]", reply)  # 找到finish信号
 
         if finish:
             print(f"\n --- FINAL ANSWER ---", finish.group(1))
@@ -33,7 +33,10 @@ def run_agent(user_query: str):
 
         # ---- 工具调用逻辑：必须在 for 循环内部 ----
         tool_name, args_str = match.groups()
+
+        # 结果：[('city', '北京'), ('unit', 'c')]
         params = dict(re.findall(r'(\w+)="([^"]+)"', args_str))
+        
 
         if tool_name not in tools:
             obs = f"错误：没有这个工具 {tool_name}"
