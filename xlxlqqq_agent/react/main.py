@@ -1,13 +1,26 @@
 from tools import get_weather, recommend_attraction
-from agent import ask_llm
-from prompts import REACT_PROMPT
+from agent import ask_llm, chat_with_tools
+from prompts import SYSTEM
+from tools import TOOL_SCHEMAS
 import re
+import json
 
 MAX_STEP = 5
-tools = {
+tool_funcs = {
     "get_weather": get_weather,
     "recommend_attraction": recommend_attraction,
 }
+
+def run_tool_call(tool_call):
+    fn = tool_call.function
+    name = fn.name
+    args = json.loads(fn.arguments)
+
+    func = tool_funcs.get(name)
+    if not func:
+        return f"错误：找不到工具 {name}"
+
+    return func(**args)
 
 def parse_action(text: str):
     """
@@ -35,46 +48,42 @@ def parse_action(text: str):
 
     return tool_name, params
 
-def run_agent(user_query: str):
-    history = user_query
+def run_agent(user_input: str):
+    messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": user_input},
+    ]
 
-    for step in range(MAX_STEP):
-        print(f"\n--- STEP {step + 1} ---")
+    for step in range(5):
+        print(f"\n--- Step {step + 1} ---")
 
-        reply = ask_llm(
-            system=REACT_PROMPT,
-            user=history
-        )
-        print("reply: \n", reply)
-        print(f"[debug] history 长度={len(history)} 字符")
+        resp = chat_with_tools(messages, TOOL_SCHEMAS)
+        msg = resp.choices[0].message
 
-        # params 结果：[('city', '北京'), ('unit', 'c')]
-        tool_name, params = parse_action(reply)
+        # 模型说话
+        if msg.content:
+            print("Assistant:", msg.content)
 
-        if tool_name == "finish":
-            # 此时 params 是最终答案字符串，不是字典
-            print("\n✅ Final Answer:", params)
-            return
+        # 如果模型没用工具 → 结束
+        if not msg.tool_calls:
+            print("✅ 结束")
+            break
 
-        if tool_name is None:
-            print("⚠️ 无法解析 Action，结束")
-            return
+        # 把 assistant 的消息（含 tool_calls）加入历史
+        messages.append(msg)
 
-        if tool_name not in tools:
-            obs = f"错误：没有这个工具，可用工具：{list(tools.keys())}"
-        else:
-            try:
-                obs = tools[tool_name](**params)
-            except TypeError as e:
-                # 参数不对，把错误信息丢给模型
-                obs = f"工具调用失败，参数错误：{e}。请严格使用 city=\"...\" weather=\"...\" 格式。"
+        # 逐个执行
+        for tc in msg.tool_calls:
+            obs = run_tool_call(tc)
+            print(f"Tool({tc.function.name}) -> {obs}")
 
-        print("Observation:", obs)
-        history += "\n" + reply + f"\nObservation: {obs}"
-
-    else:
-        # for...else：循环正常跑完 MAX_STEP（未被 break 中断）才会走到这里
-        print("\n 达到最大步数，仍未完成")
+            # Observation 塞回去
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "name": tc.function.name,
+                "content": obs,
+            })
 
 if __name__ == "__main__": 
     question = "北京今天天气怎么样？适合去哪玩？"

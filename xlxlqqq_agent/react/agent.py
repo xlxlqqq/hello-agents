@@ -9,6 +9,26 @@ client = OpenAI(
     base_url=os.getenv("OPENAI_BASE_URL"),
 )
 
+def chat_with_tools(messages, tools=None, max_retries: int = 3):
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return client.chat.completions.create(
+                model=os.getenv("MODEL_NAME"),
+                messages=messages,
+                temperature=0.2,
+                timeout=30,
+                tools=tools,
+                tool_choice="auto",
+            )
+        except (APIConnectionError, APITimeoutError) as e:
+            last_err = e
+            print(f"  ⚠️ LLM 请求失败（第 {attempt}/{max_retries} 次）：{type(e).__name__}")
+            import time
+            time.sleep(2 ** (attempt - 1))  # 指数退避：1s, 2s, 4s
+
+    raise RuntimeError(f"LLM 请求连续 {max_retries} 次失败：{last_err}")
+
 def ask_llm(system: str, user: str, max_retries: int = 3) -> str:
     messages = [
         {"role": "system", "content": system},
