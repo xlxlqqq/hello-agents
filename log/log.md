@@ -24,7 +24,21 @@
     1. 直接回答用户问题，标注为FINISH关键字，用户正则表达匹配到FINISH关键字，即可结束循环
     2. 需要执行下一步动作，标注为ACTION关键字，用户正则表达匹配到ACTION关键字，即可执行下一步动作，比如调用相关tool。
 
+    后续在agent中进行改进，由于各种模型都支持Function Calling / JSON Schema，所以可以使用Function Calling / JSON Schema来解决。不需要正则表达式来搜索FINISH和ACTION关键字，直接根据Function Calling / JSON Schema的返回结果，即可判断是否需要结束循环。
+
+    使用Function Call的详细工作流，可以参考./week1/functioncall.md中的描述
+
 ## 踩坑
 需要增加设计：
     超时timeout
     与LLM的聊天重试机制，丢错机制
+
+
+## todo
+- 能不能不让模型乱写参数，而是让模型填表？
+    通过Function Calling / JSON Schema来解决
+    已经解决 20260803
+    思路： 由于各种模型都支持Function Calling / JSON Schema，所以可以使用Function Calling / JSON Schema来解决。
+- 工具描述、检索、路由（Tool Router）来解决大量tool总是选错的问题
+- agent总是在改用tool的时候，不用tool，
+    通过强制工具约束（System Prompt + 惩罚）
