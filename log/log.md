@@ -42,3 +42,17 @@
 - 工具描述、检索、路由（Tool Router）来解决大量tool总是选错的问题
 - agent总是在改用tool的时候，不用tool，
     通过强制工具约束（System Prompt + 惩罚）
+- 模型的自己部署自己推理，而不是让OpenAI的服务器帮我推理
+    硬件（CPU/GPU/NPU，消费卡 CUDA 架构）
+    ↓
+    算子层：GEMM、Softmax、RoPE、Attention 算子
+    ↓
+    注意力优化：FlashAttention / PagedAttention / KV Cache 量化
+    ↓
+    权重压缩：FP16→INT8/INT4，GGUF/K-quant/AWQ/GPTQ
+    ↓
+    推理引擎：llama.cpp（C++）/ vLLM / TensorRT-LLM
+    ↓
+    服务层：OpenAI 兼容 API、batch、吞吐/延迟调优
+    ↓
+    你的 Agent 只在这最上层
