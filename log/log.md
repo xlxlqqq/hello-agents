@@ -56,3 +56,5 @@
     服务层：OpenAI 兼容 API、batch、吞吐/延迟调优
     ↓
     你的 Agent 只在这最上层
+- 写一个planandsolve类型的agent，用于回答用户的问题。
+- 写一个reflaction类型的agent，用于回答用户的问题。
