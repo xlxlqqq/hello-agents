@@ -1,0 +1,81 @@
+# ============================================================
+# DocGuard Agent .gitignore
+# ============================================================
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ===== 虚拟环境 =====
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+.python-version
+
+# ===== 测试与覆盖率 =====
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ===== 环境变量 =====
+.env
+.env.local
+.env.*.local
+
+# ===== 运行时输出 =====
+output/
+!output/.gitkeep
+logs/
+*.log
+
+# ===== ChromaDB 持久化数据 =====
+output/chroma_db/
+
+# ===== 生成的报告与修复文档 =====
+output/reports/*
+output/repaired/*
+!output/reports/.gitkeep
+!output/repaired/.gitkeep
+
+# ===== 临时文件 =====
+*.tmp
+*.bak
+*.orig
+.tmp/
+tmp/
