@@ -194,7 +194,7 @@ class ValidationAgent(BaseAgent):
         style_profile: Optional[dict] = state.get("style_profile")
 
         # ---- 重新审查 repaired_document ----
-        recheck_issues = self._recheck_document(doc, style_profile)
+        recheck_issues = await self._recheck_document(doc, style_profile)
         logger.info(
             "[Validation] 复检完成 | original=%d | recheck=%d",
             len(original_issues), len(recheck_issues),
@@ -284,7 +284,7 @@ class ValidationAgent(BaseAgent):
     # ============================================================
     # 辅助方法
     # ============================================================
-    def _recheck_document(
+    async def _recheck_document(
         self,
         doc: StructuredDocument,
         style_profile: Optional[dict],
@@ -304,9 +304,17 @@ class ValidationAgent(BaseAgent):
             logger.warning("StructureChecker 复检失败: %s", e)
 
         try:
-            ctn = self._cnt_cls(None, [])
+            ctn = self._cnt_cls(
+                None, [],
+                llm_client=self.llm_client,
+                enable_llm_typo_check=self.llm_client is not None,
+            )
             # ContentChecker 不需要 terminology 也能跑错别字检查
             issues.extend(ctn.check(doc))
+            # LLM 增强错别字检测
+            if ctn.enable_llm_typo_check:
+                llm_issues = await ctn.async_check_llm(doc)
+                issues.extend(llm_issues)
         except Exception as e:
             logger.warning("ContentChecker 复检失败: %s", e)
         return issues

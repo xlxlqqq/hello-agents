@@ -42,7 +42,7 @@ from typing import Any, Optional
 
 from agents.base import BaseAgent
 from core.config import DocGuardConfig
-from core.llm_client import LLMClient
+from core.llm_client import LLMClient, LLMMessage
 from core.logging_config import get_logger
 from core.state import DocGuardState, Location, ReviewIssue, ReviewReport, StyleProfile
 from document.models import IssueCategory, IssueSeverity, Paragraph, StructuredDocument
@@ -72,6 +72,28 @@ COMMON_TYPO_RULES: list[tuple[str, str, str]] = [
     ("迫不急待", "迫不及待", IssueSeverity.MINOR),
     ("一愁莫展", "一筹莫展", IssueSeverity.MINOR),
 ]
+
+# LLM 增强错别字检测的系统提示词
+# 要求 LLM 发现依赖上下文语义才能判断的错别字，而非词表能覆盖的简单错误
+LLM_TYPO_DETECTION_PROMPT = (
+    "你是一位专业的中文校对员。请检测以下文本段落中的错别字或用词错误——"
+    "特别注意那些**仅靠简单词表无法发现、需要结合上下文语义才能判断**的错误。\n\n"
+    "例如：\n"
+    "- \"重做系统\" → 实际应为 \"重装系统\"（语义错误：\"重做\"通常表示重新执行，\"重装\"才表示重新安装）\n"
+    "- \"参差不起\" → 实际应为 \"参差不齐\"\n"
+    "- \"迫不急待\" → 实际应为 \"迫不及待\"\n\n"
+    "对每个发现的错误，返回 JSON 格式（严格遵循，不要包含其他文字）：\n"
+    '{\n  "findings": [\n    {\n      "paragraph_index": <整数，段落索引>,\n'
+    '      "original": "<原文中的错误文本片段>",\n'
+    '      "correction": "<修正后的正确写法>",\n'
+    '      "reason": "<简要判断依据>",\n'
+    '      "confidence": <0-1 置信度>\n    }\n  ]\n}\n\n'
+    "注意事项：\n"
+    "- 只检测确凿的错误，疑似的不要报告\n"
+    "- 如果段落没有错误，不在 findings 中包含该段\n"
+    "- 如果没有发现任何错误，返回 {\"findings\": []}\n"
+    "- 输出格式必须严格为 JSON，不要包含其他文字"
+)
 
 # 严重程度扣分
 SEVERITY_SCORE_DEDUCTION = {
@@ -486,11 +508,15 @@ class ContentChecker:
         self,
         terminology_list: Optional[list[str]] = None,
         extra_typo_rules: Optional[list[tuple[str, str, str]]] = None,
+        llm_client: Optional[LLMClient] = None,
+        enable_llm_typo_check: bool = False,
     ) -> None:
         self.terminology = terminology_list or []
         self.typo_rules: list[tuple[str, str, str]] = list(COMMON_TYPO_RULES)
         if extra_typo_rules:
             self.typo_rules.extend(extra_typo_rules)
+        self.llm_client = llm_client
+        self.enable_llm_typo_check = enable_llm_typo_check and llm_client is not None
         self.logger = get_logger("review.content")
 
     def check(self, doc: StructuredDocument) -> list[ReviewIssue]:
@@ -605,6 +631,106 @@ class ContentChecker:
                         auto_repairable=True,
                     ))
                 pos = idx + 1
+        return issues
+
+
+    # ---- LLM 增强错别字检测 ----
+    async def async_check_llm(self, doc: StructuredDocument) -> list[ReviewIssue]:
+        """Use LLM to detect context-dependent typos that a static wordlist cannot cover."""
+        if not self.llm_client or not self.enable_llm_typo_check:
+            return []
+        if doc is None:
+            return []
+
+        issues: list[ReviewIssue] = []
+
+        # Collect body paragraphs (skip empty / table-contained)
+        text_paragraphs = [
+            p for p in doc.paragraphs
+            if p.text.strip() and not p.in_table
+        ]
+        if not text_paragraphs:
+            return issues
+
+        BATCH_SIZE = 10
+        num_batches = (len(text_paragraphs) + BATCH_SIZE - 1) // BATCH_SIZE
+
+        for batch_start in range(0, len(text_paragraphs), BATCH_SIZE):
+            batch = text_paragraphs[batch_start:batch_start + BATCH_SIZE]
+
+            # Build user prompt with paragraph texts
+            lines = []
+            for p in batch:
+                text = p.text[:800] if len(p.text) > 800 else p.text
+                lines.append(f"[段落{p.paragraph_index}]: {text}")
+            user_text = "\n".join(lines)
+
+            messages = [
+                LLMMessage(role="system", content=LLM_TYPO_DETECTION_PROMPT),
+                LLMMessage(role="user", content=user_text),
+            ]
+
+            try:
+                result = await self.llm_client.chat_with_json(
+                    messages=messages,
+                    temperature=0.1,
+                )
+                findings = result.get("findings", [])
+                for f in findings:
+                    para_idx = f.get("paragraph_index")
+                    para = doc.get_paragraph_by_index(para_idx) if para_idx is not None else None
+                    if para is None:
+                        self.logger.warning(
+                            "LLM typo check: unknown paragraph index %s, skipped", para_idx,
+                        )
+                        continue
+
+                    original = f.get("original", "")
+                    correction = f.get("correction", "")
+                    reason = f.get("reason", "")
+                    confidence = min(max(float(f.get("confidence", 0.5)), 0.0), 1.0)
+
+                    idx = para.text.find(original) if original else -1
+                    snippet_start = max(0, (idx if idx >= 0 else 0) - 10)
+                    snippet_end = min(
+                        len(para.text),
+                        (idx if idx >= 0 else 0) + len(original) + 10,
+                    )
+
+                    issues.append(ReviewIssue(
+                        issue_id=_issue_id(),
+                        category=IssueCategory.CONTENT_TYPO,
+                        severity=IssueSeverity.MAJOR,
+                        title=f"[LLM] 疑似错别字：{original} 应为 {correction}",
+                        description=(
+                            f"LLM 语义检测发现疑似错别字「{original}」，"
+                            f"根据上下文建议改为「{correction}」。"
+                            f"判断依据：{reason}"
+                        ),
+                        location=_make_location(
+                            paragraph_id=para.paragraph_id,
+                            paragraph_index=para.paragraph_index,
+                            char_start=idx if idx >= 0 else None,
+                            char_end=(idx + len(original)) if idx >= 0 else None,
+                            text_snippet=para.text[snippet_start:snippet_end],
+                        ),
+                        original_text=original,
+                        suggested_fix=f"替换为「{correction}」",
+                        source="llm",
+                        confidence=confidence,
+                        auto_repairable=True,
+                    ))
+            except Exception as e:
+                self.logger.warning(
+                    "LLM typo detection batch failed (paragraphs %d-%d): %s",
+                    batch[0].paragraph_index, batch[-1].paragraph_index, e,
+                )
+                continue
+
+        self.logger.info(
+            "LLM 错别字检测完成 | 批次=%d | 段落=%d | 问题=%d",
+            num_batches, len(text_paragraphs), len(issues),
+        )
         return issues
 
 
@@ -736,7 +862,11 @@ class ReviewAgent(BaseAgent):
         # 初始化检查器（支持 DI，否则按需创建）
         format_c = self._format_checker or FormatChecker(style_profile)
         structure_c = self._structure_checker or StructureChecker(style_profile)
-        content_c = self._content_checker or ContentChecker(terminology)
+        content_c = self._content_checker or ContentChecker(
+            terminology,
+            llm_client=self.llm_client,
+            enable_llm_typo_check=self.llm_client is not None,
+        )
 
         issues: list[ReviewIssue] = []
         try:
@@ -753,6 +883,17 @@ class ReviewAgent(BaseAgent):
             issues.extend(content_c.check(parsed_doc))
         except Exception as e:
             self.logger.warning("[Review] 内容检查失败（跳过）: %s", e, exc_info=True)
+
+        # ---- LLM 增强错别字检测（Phase 5 扩展） ----
+        if getattr(content_c, 'llm_client', None) and getattr(content_c, 'enable_llm_typo_check', False):
+            try:
+                llm_issues = await content_c.async_check_llm(parsed_doc)
+                issues.extend(llm_issues)
+                self.logger.info(
+                    "[Review] LLM 错别字检测完成 | 发现 %d 个问题", len(llm_issues),
+                )
+            except Exception as e:
+                self.logger.warning("[Review] LLM 错别字检测失败（跳过）: %s", e)
 
         # 汇总报告
         report = summarize_issues(issues)

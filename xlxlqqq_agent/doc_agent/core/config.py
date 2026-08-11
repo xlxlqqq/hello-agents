@@ -42,6 +42,7 @@ class ChromaConfig:
 
     persist_directory: str = "output/chroma_db"
     collection_name: str = "docguard_knowledge"
+    embedding_dim: int = 1536
     top_k: int = 5
     similarity_threshold: float = 0.7
 
@@ -178,6 +179,9 @@ class DocGuardConfig:
         )
         self.chroma.collection_name = os.getenv(
             "CHROMA_COLLECTION_NAME", self.chroma.collection_name
+        )
+        self.chroma.embedding_dim = int(
+            os.getenv("CHROMA_EMBEDDING_DIM", str(self.chroma.embedding_dim))
         )
         self.chroma.top_k = int(os.getenv("CHROMA_TOP_K", str(self.chroma.top_k)))
         self.chroma.similarity_threshold = float(

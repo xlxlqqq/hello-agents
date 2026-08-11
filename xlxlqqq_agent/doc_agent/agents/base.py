@@ -50,7 +50,9 @@ class BaseAgent(ABC):
             config: 全局配置
             logger: 可选的 logger（None 时按 agent_name 创建）
         """
+        # 兼容两套命名：历史代码使用 self.llm，部分 Agent 依赖 self.llm_client
         self.llm: LLMClient = llm_client
+        self.llm_client: LLMClient = llm_client
         self.config: DocGuardConfig = config
         self.logger = logger or get_logger(f"agents.{self.agent_name()}")
 

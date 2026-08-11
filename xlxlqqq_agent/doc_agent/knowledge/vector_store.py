@@ -145,12 +145,17 @@ class VectorStore:
             # 获取或创建 collection
             self._collection = self._client.get_or_create_collection(
                 name=self.collection_name,
-                metadata={"description": "DocGuard knowledge base"},
+                metadata={
+                    "description": "DocGuard knowledge base",
+                    "embedding_dim": str(self.config.embedding_dim),
+                },
             )
+            self._ensure_collection_dimension()
             self.logger.info(
-                "Collection '%s' 已就绪 | 现有记录数=%d",
+                "Collection '%s' 已就绪 | 现有记录数=%d | embedding_dim=%s",
                 self.collection_name,
                 self._collection.count(),
+                self.config.embedding_dim,
             )
         except Exception as e:
             raise wrap_exception(
@@ -160,6 +165,68 @@ class VectorStore:
                 persist_directory=self.config.persist_directory,
                 collection_name=self.collection_name,
             ) from e
+
+    def _ensure_collection_dimension(self) -> None:
+        """确保 collection 维度与当前 embedding 配置一致。"""
+        if self._collection is None:
+            return
+
+        expected_dim = int(getattr(self.config, "embedding_dim", 0) or 0)
+        if expected_dim <= 0:
+            return
+
+        existing_dim = self._detect_collection_dimension()
+        if existing_dim is not None and existing_dim != expected_dim:
+            self.logger.warning(
+                "Collection '%s' embedding 维度不一致: expected=%d, existing=%d，正在重建 collection",
+                self.collection_name,
+                expected_dim,
+                existing_dim,
+            )
+            assert self._client is not None
+            self._client.delete_collection(self.collection_name)
+            self._collection = self._client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={
+                    "description": "DocGuard knowledge base",
+                    "embedding_dim": str(expected_dim),
+                },
+            )
+            return
+
+        meta = self._collection.metadata or {}
+        if str(meta.get("embedding_dim", "")).strip() and str(meta.get("embedding_dim")) != str(expected_dim):
+            try:
+                self._collection.modify(
+                    metadata={
+                        **meta,
+                        "embedding_dim": str(expected_dim),
+                    }
+                )
+            except Exception:
+                # Collection may be empty or metadata not writable in some Chroma versions.
+                pass
+
+    def _detect_collection_dimension(self) -> Optional[int]:
+        """返回现有 collection 里的 embedding 维度。"""
+        if self._collection is None:
+            return None
+
+        try:
+            meta = self._collection.metadata or {}
+            if meta.get("embedding_dim") is not None:
+                return int(str(meta["embedding_dim"]))
+        except Exception:
+            pass
+
+        try:
+            peek = self._collection.peek()
+            embeddings = peek.get("embeddings") or []
+            if embeddings and len(embeddings) > 0 and embeddings[0] is not None:
+                return len(embeddings[0])
+        except Exception:
+            pass
+        return None
 
     def reset(self) -> None:
         """

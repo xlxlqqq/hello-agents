@@ -471,8 +471,9 @@ async def cmd_ingest(args: argparse.Namespace) -> int:
         from knowledge.vector_store import create_vector_store
         from knowledge.ingestor import KnowledgeIngestor
         if args.mock_embedding:
+            config.chroma.embedding_dim = 384
             from core.mock_embedding import create_mock_embedding_client
-            embedding_client = create_mock_embedding_client()
+            embedding_client = create_mock_embedding_client(dim=config.chroma.embedding_dim)
             logger.warning("启用 Mock Embedding 模式（仅适用于开发/测试）")
         else:
             from core.embedding_client import create_embedding_client

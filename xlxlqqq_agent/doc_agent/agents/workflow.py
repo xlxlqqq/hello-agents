@@ -431,11 +431,12 @@ async def run_retrieval_workflow(
 
     retrieval_agent: Optional[RetrievalAgent] = None
     if mock_embedding:
+        config.chroma.embedding_dim = 384
         from core.mock_embedding import create_mock_embedding_client
         retrieval_agent = RetrievalAgent(
             llm_client=llm_client,
             config=config,
-            embedding_client=create_mock_embedding_client(),
+            embedding_client=create_mock_embedding_client(dim=config.chroma.embedding_dim),
         )
         logger.warning("启用 Mock Embedding 模式（仅适用于开发/测试）")
 
@@ -470,11 +471,12 @@ async def run_review_workflow(
 
     retrieval_agent: Optional[RetrievalAgent] = None
     if mock_embedding:
+        config.chroma.embedding_dim = 384
         from core.mock_embedding import create_mock_embedding_client
         retrieval_agent = RetrievalAgent(
             llm_client=llm_client,
             config=config,
-            embedding_client=create_mock_embedding_client(),
+            embedding_client=create_mock_embedding_client(dim=config.chroma.embedding_dim),
         )
         logger.warning("启用 Mock Embedding 模式（仅适用于开发/测试）")
 
@@ -513,11 +515,12 @@ async def run_repair_workflow(
 
     retrieval_agent: Optional[RetrievalAgent] = None
     if mock_embedding:
+        config.chroma.embedding_dim = 384
         from core.mock_embedding import create_mock_embedding_client
         retrieval_agent = RetrievalAgent(
             llm_client=llm_client,
             config=config,
-            embedding_client=create_mock_embedding_client(),
+            embedding_client=create_mock_embedding_client(dim=config.chroma.embedding_dim),
         )
         logger.warning("启用 Mock Embedding 模式（仅适用于开发/测试）")
 
@@ -588,11 +591,12 @@ async def run_docguard_workflow(
 
     retrieval_agent: Optional[RetrievalAgent] = None
     if mock_embedding:
+        config.chroma.embedding_dim = 384
         from core.mock_embedding import create_mock_embedding_client
         retrieval_agent = RetrievalAgent(
             llm_client=llm_client,
             config=config,
-            embedding_client=create_mock_embedding_client(),
+            embedding_client=create_mock_embedding_client(dim=config.chroma.embedding_dim),
         )
         logger.warning("启用 Mock Embedding 模式（仅适用于开发/测试）")
 
