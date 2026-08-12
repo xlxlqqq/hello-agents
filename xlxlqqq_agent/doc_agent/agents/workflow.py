@@ -45,6 +45,15 @@ logger = get_logger("agents.workflow")
 
 # ============================================================
 # 路由函数
+'''
+定义状态机的路由函数：条件分支控制流
+parser 成功后 → 进入 retrieval
+parser 失败 → 结束
+review 有问题 → 进入 hitl
+review 没问题 → 结束
+validation 通过 → 结束
+validation 没通过但还没到上限 → 继续修复循环
+'''
 # ============================================================
 
 def _route_after_parser(state: DocGuardState) -> str:
@@ -64,7 +73,7 @@ def _route_after_review(state: DocGuardState) -> str:
     """
     issues = state.get("review_issues") or []
     if len(issues) > 0:
-        return "hitl"
+        return "hitl"  # 有问题 → 进入 HITL 修复，人工确认
     return "end"
 
 
@@ -82,13 +91,16 @@ def _route_after_validation(state: DocGuardState) -> str:
         * 超过 max_iterations → END（记录残留）
         * 未超过 → hitl（再给一次修复机会）
     """
+    # 类型注解， Optional[ValidationResult] 表示它的类型是 ValidationResult 或 None
     validation_result: Optional[ValidationResult] = state.get("validation_result")
     if validation_result is None:
         return "end"
     if validation_result.get("pass_flag"):
         return "end"
 
+    # 最多允许2次迭代闭环（可通过配置调整）
     max_iter = (
+        # 从validation_result中读max_iterations字段，读到了就用它，否则默认2
         validation_result.get("max_iterations", 2)
         if isinstance(validation_result, dict) else 2
     )
@@ -102,6 +114,7 @@ def _route_after_validation(state: DocGuardState) -> str:
         )
         return "end"
 
+    # 没有达到迭代上限，继续闭环
     # 更新 iterations（用于下一轮判断），注意 StateGraph 的条件边不能改 state，
     # 所以这里只是 log，真正计数在 ValidationAgent.execute 里。
     logger.info(
@@ -113,8 +126,19 @@ def _route_after_validation(state: DocGuardState) -> str:
 
 # ============================================================
 # Phase 2 ~ Phase 5 的 build_*_graph（保留向后兼容）
+'''
+一组工厂函数,不是“一个大而全的单体函数”，而是“按阶段分图、按阶段可运行”。
+'''
 # ============================================================
 
+# 先把文档读进来并结构化
+# 工程基线，保证了后续所有更高层的工作流都不是在空白基础上开始，而是建立在：
+# 能识别任务，能解析文档，能得到结构化文档对象的前提下，
+# 如果这个阶段失败，后面的 retrieval / review / repair 都没有意义。
+
+# 返回一个Graph对象，里面包含了planner和parser两个节点，以及它们之间的边。
+# 判空是为了保证这个函数可以在没有传入config和llm_client的情况下使用默认配置和默认LLM客户端。
+# 可以方便地用于测试
 def build_parser_only_graph(
     config: Optional[DocGuardConfig] = None,
     llm_client: Optional[LLMClient] = None,
@@ -123,13 +147,17 @@ def build_parser_only_graph(
 ) -> CompiledStateGraph:
     """Phase 2 工作流（仅 planner + parser），保留用于旧测试。"""
     if config is None:
-        config = get_config()
+        config = get_config()  # LLM相关参数，ChromaDB路径，输出目录，日志设置等
     if planner is None:
         planner = PlannerAgent(llm_client=llm_client, config=config)
     if parser is None:
         parser = ParserAgent(llm_client=llm_client, config=config)
 
+    # 把处理流程写成状态机
+    # DocGuardState 是共享状态字典，后面 planner/parser 都会往里面写数据，每次调用 workflow 都会拿一份新的状态对象传进去
     workflow = StateGraph(DocGuardState)
+    # 每个节点对应一个Agent的_safe_execute方法，这个方法会调用Agent的execute方法，并处理异常
+    # 捕获异常，把错误写回 state，保证状态结构不坏，避免整个图因为一个节点报错直接崩掉
     workflow.add_node("planner", planner._safe_execute)
     workflow.add_node("parser", parser._safe_execute)
     workflow.add_edge(START, "planner")
@@ -140,7 +168,7 @@ def build_parser_only_graph(
     logger.info("Phase 2 工作流已构建: START → planner → parser → END")
     return compiled
 
-
+# 读进来 + 再找相似案例
 def build_retrieval_graph(
     config: Optional[DocGuardConfig] = None,
     llm_client: Optional[LLMClient] = None,
@@ -166,6 +194,8 @@ def build_retrieval_graph(
 
     workflow.add_edge(START, "planner")
     workflow.add_edge("planner", "parser")
+    # 有分支的边，parser成功 → retrieval，parser失败 → END
+    # 路由函数，LangGraph 会在 parser 执行结束后调用它，传入当前 state。
     workflow.add_conditional_edges(
         "parser",
         _route_after_parser,
@@ -177,7 +207,7 @@ def build_retrieval_graph(
     logger.info("Phase 3 工作流已构建")
     return compiled
 
-
+# 读进来 + 找案例 + 审查问题
 def build_review_graph(
     config: Optional[DocGuardConfig] = None,
     llm_client: Optional[LLMClient] = None,
@@ -215,11 +245,12 @@ def build_review_graph(
     workflow.add_edge("retrieval", "review")
     workflow.add_edge("review", END)
 
+    # 编译成一个可执行的图对象
     compiled = workflow.compile()
     logger.info("Phase 4 工作流已构建")
     return compiled
 
-
+# 审查 + 自动修复
 def build_repair_graph(
     config: Optional[DocGuardConfig] = None,
     llm_client: Optional[LLMClient] = None,
@@ -284,6 +315,7 @@ def build_repair_graph(
 # Phase 6：完整六层 + 迭代闭环
 # ============================================================
 
+# 完整闭环：审查 → 修复 → 验证
 def build_docguard_graph(
     config: Optional[DocGuardConfig] = None,
     llm_client: Optional[LLMClient] = None,
@@ -382,6 +414,8 @@ def build_docguard_graph(
 # 便捷运行函数
 # ============================================================
 
+# async 声明的函数，可以在异步环境中被 await 调用，返回一个协程对象。
+# async 函数不能直接像普通函数那样调用返回结果：
 async def run_parser_workflow(
     input_file_path: str,
     config: Optional[DocGuardConfig] = None,
@@ -407,6 +441,7 @@ async def run_parser_workflow(
         format_hint=format_hint,
     )
     logger.info("启动 Phase 2 解析工作流: %s (format=%s)", input_file_path, format_hint)
+    # 一旦调用 ainvoke，LangGraph 会按顺序跑：planner 节点，parser 节点，很耗时
     return await app.ainvoke(initial_state)
 
 

@@ -190,8 +190,9 @@ def parse_args() -> argparse.Namespace:
 # 子命令实现
 # ============================================================
 
+# 解析工作流
 async def cmd_parse(args: argparse.Namespace) -> int:
-    config = get_config()
+    config = get_config()  # 获取全局配置
     if args.verbose:
         config.log.level = "DEBUG"
     setup_logging(config)
@@ -201,12 +202,14 @@ async def cmd_parse(args: argparse.Namespace) -> int:
     logger.info("DocGuard Agent - Phase 2 Parser")
     logger.info("=" * 60)
 
+    # 确定输入文件路径存在
     input_path = Path(args.input_file)
     if not input_path.exists():
         logger.error("输入文件不存在: %s", args.input_file)
         return 1
 
     try:
+        # await关键字：
         final_state = await run_parser_workflow(
             input_file_path=str(input_path.resolve()),
             config=config,
@@ -216,6 +219,7 @@ async def cmd_parse(args: argparse.Namespace) -> int:
         logger.error("工作流执行失败: %s", e, exc_info=True)
         return 2
 
+    # 打印输出结果
     _print_parse_result(final_state, input_path)
     if args.json and final_state.get("parsed_document"):
         _save_json_report(final_state, input_path, args.output_dir, suffix="parse")
